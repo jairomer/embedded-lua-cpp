@@ -1,6 +1,7 @@
 #include <iostream>
 #include "lua.hpp"
 #include <assert.h>
+#include <cstdio>
 /**
  * Hello fellow copy-paster, here is the result of my work after following that
  * course on Youtube.
@@ -290,9 +291,122 @@ int main()
         const char* ianIs = lua_tostring(L, -1);
         std::cout << "ianIs = " << ianIs << std::endl;
 
-        /* Push new value to the table. */
-
 
         lua_close(L); /* x will be garbage collected. */
+    }
+
+    {
+        std::cout << " ------ Function test ------" << std::endl;
+        auto TEST = R"(
+            function test(ks)
+                ks["m"] = ks["m"].."D"
+                ks["b"] = ks["b"].."D"
+                ks["u"] = ks["u"].."D"
+                return ks
+            end
+        )";
+
+        auto stackDump = [](lua_State* L){
+            int i=lua_gettop(L);
+            printf(" ----------------  Stack Dump ----------------\n");
+            while(i)
+            {
+                int t = lua_type(L, i);
+                switch(t)
+                {
+                    case LUA_TSTRING:
+                        printf("%d:`%s'", i, lua_tostring(L, i));
+                        break;
+                    case LUA_TBOOLEAN:
+                        printf("%d: %s",i,lua_toboolean(L, i) ? "true" : "false");
+                        break;
+                    case LUA_TNUMBER:
+                        printf("%d: %g",  i, lua_tonumber(L, i));
+                        break;
+                    default:
+                        printf("%d: %s", i, lua_typename(L, t)); break;
+                }
+                i--;
+            }
+            printf("\n--------------- Stack Dump Finished ---------------\n" );
+        };
+
+        auto l_pushTableString = [stackDump](lua_State* L, std::string& key, std::string& value) {
+            std::cout << "Pushing value '"<< value << "' with key '" << key << "'" << std::endl;
+            //stackDump(L);
+            lua_pushstring(L, key.c_str());
+            lua_pushstring(L, value.c_str());
+            lua_settable(L, -3);
+            //stackDump(L);
+            };
+
+        auto  l_getTableString = [stackDump](lua_State* L, std::string& key, std::string& value) {
+            std::cout << "Geting string from table with key '" << key << "'" <<  std::endl;
+            //stackDump(L);
+            lua_getfield(L, -1*lua_gettop(L), key.c_str());
+            value = std::string(lua_tostring(L, -1));
+            };
+
+        auto execute = [](lua_State* L, int num_arg, int num_ret, int handler){
+            std::cout << "Executing...";
+            int ret;
+            if((ret = lua_pcall(L, num_arg, num_ret, handler)))
+            {
+                switch(ret) {
+                    case LUA_ERRRUN: // runtime error.
+                        std::cout << "Runtime error" << std::endl;
+                        break;
+                    case LUA_ERRMEM: // Memory allocation error.
+                        std::cout << "Memory error" << std::endl;
+                        break;
+                    case LUA_ERRERR: // Error while running the handler function.
+                        std::cout << "Handler error" << std::endl;
+                        break;
+                    default:
+                        break;
+                }
+                return -1;
+            }
+            std::cout << "Success!" << std::endl;
+            return 0;
+        };
+
+        lua_State* L = luaL_newstate();
+        // Loads and runs the given string.
+        luaL_dostring(L, TEST);
+        lua_getglobal(L, "test");
+        if (!lua_isfunction(L, -1))
+        {
+            std::cout << "global 'test' is not a function. " << std::endl;
+            lua_close(L);
+            exit(-1);
+        }
+        std::cout << "Function retreived. Inserting 'ks' argument." << std::endl;
+        lua_newtable(L);
+        std::string v = "value1";
+        std::string k = "m";
+        l_pushTableString(L, k, v);
+        k = "b";
+        v = "value2";
+        l_pushTableString(L, k, v);
+        k = "u";
+        v = "value3";
+        l_pushTableString(L, k, v);
+
+        //lua_getglobal(L, "R");
+        execute(L, 1, 1, 0);
+        std::string new_m("");
+        std::string new_u("");
+        std::string new_b("");
+        k = "m";
+        l_getTableString(L, k, new_m );
+        std::cout << k << " : " << new_m << std::endl;
+        k = "u";
+        l_getTableString(L, k, new_u);
+        std::cout << k << " : " << new_u << std::endl;
+        k = "b";
+        l_getTableString(L, k, new_b);
+        std::cout << k << " : " << new_b << std::endl;
+        lua_close(L);
     }
 }
