@@ -2,6 +2,9 @@
 #include "lua.hpp"
 #include <assert.h>
 #include <cstdio>
+#include <map>
+#include <vector>
+
 /**
  * Hello fellow copy-paster, here is the result of my work after following that
  * course on Youtube.
@@ -408,5 +411,306 @@ int main()
         l_getTableString(L, k, new_b);
         std::cout << k << " : " << new_b << std::endl;
         lua_close(L);
+    }
+
+    {
+        std::cout << "----- Pushers/Pullers Testing -----" << std::endl;
+
+        auto TEST = R"(
+            function test(doc)
+                doc.path = doc.path.."/new/correction"
+                doc.method = "DELETE"
+                doc.headers.h1 = "header1 modified"
+                doc.headers.h2 = "header2 modified"
+                doc.body.attr1 = "modified attribute 1"
+                doc.body.attr2 = "modified attribute 2"
+
+                for i=1, #doc.arr_data do
+                    doc.arr_data[i] = doc.arr_data[i].." modified"
+                end
+
+                return doc
+            end
+        )";
+
+        class Document
+        {
+        public:
+            std::string path    = "";
+            std::string method  = "";
+            std::multimap<std::string, std::string> headers;
+            std::multimap<std::string, std::string> body;
+            std::vector<std::string> arr_data;
+        };
+
+        auto execute = [](lua_State* L, int num_arg, int num_ret, int handler){
+            std::cout << "Executing...";
+            int ret;
+            if((ret = lua_pcall(L, num_arg, num_ret, handler)))
+            {
+                switch(ret) {
+                    case LUA_ERRRUN: // runtime error.
+                        std::cout << "Runtime error" << std::endl;
+                        break;
+                    case LUA_ERRMEM: // Memory allocation error.
+                        std::cout << "Memory error" << std::endl;
+                        break;
+                    case LUA_ERRERR: // Error while running the handler function.
+                        std::cout << "Handler error" << std::endl;
+                        break;
+                    default:
+                        break;
+                }
+                return -1;
+            }
+            std::cout << "Success!" << std::endl;
+            return 0;
+        };
+
+        auto stackDump = [](lua_State* L){
+            int i=lua_gettop(L);
+            printf(" ----------------  Stack Dump ----------------\n");
+            while(i)
+            {
+                int t = lua_type(L, i);
+                switch(t)
+                {
+                    case LUA_TSTRING:
+                        printf("%d:`%s' ", i, lua_tostring(L, i));
+                        break;
+                    case LUA_TBOOLEAN:
+                        printf("%d: %s ",i,lua_toboolean(L, i) ? "true" : "false");
+                        break;
+                    case LUA_TNUMBER:
+                        printf("%d: %g ",  i, lua_tonumber(L, i));
+                        break;
+                    default:
+                        printf("%d: %s ", i, lua_typename(L, t)); break;
+                }
+                i--;
+            }
+            printf("\n--------------- Stack Dump Finished ---------------\n" );
+        };
+
+        /* PUSHERS */
+        auto l_pushTableString = [stackDump](lua_State* L, std::string& key, std::string& value) {
+            std::cout << "Pushing value '"<< value << "' with key '" << key << "'" << std::endl;
+            lua_pushstring(L, key.c_str());
+            lua_pushstring(L, value.c_str());
+            lua_settable(L, -3);
+        };
+
+
+
+        auto l_pushTableToTable = [stackDump, l_pushTableString](lua_State* L, std::string& key,
+                std::multimap<std::string, std::string>& map)
+        {
+            std::cout << std::endl << "[] Pushing new table with key '" << key << "'" << std::endl;
+            stackDump(L);
+            lua_pushstring(L, key.c_str());
+            lua_newtable(L);
+            if (map.size() == 0) {
+                // Push empty table.
+                lua_settable(L, -3);
+                return;
+            }
+            // Push fields
+            std::string k;
+            std::string v;
+            luaL_checkstack(L, 7, "Stack Overflown!");
+            for (auto it = map.begin(); it != map.end(); ++it )
+            {
+                stackDump(L);
+                k = (std::string) it->first;
+                v = (std::string) it->second;
+                l_pushTableString(L, k , v);
+                stackDump(L);
+            }
+            stackDump(L);
+            lua_settable(L, -3);
+        };
+
+        auto l_pushArrayToTable = [stackDump](lua_State* L, std::string& key,
+                        std::vector<std::string>& arr)
+        {
+            std::cout << std::endl << "[] Pushing new array with key '" << key << "'" << std::endl;
+            stackDump(L);
+            lua_pushstring(L, key.c_str());
+            lua_newtable(L);
+            luaL_checkstack(L, 7, "Stack Overflown!");
+            int i = 1;
+            for (auto it = arr.begin(); it != arr.end(); ++it)
+            {
+                lua_pushnumber(L, i);
+                lua_pushstring(L, (*it).c_str());
+                lua_settable(L, -3); // Commit to table.
+                i++;
+            }
+            stackDump(L);
+            lua_settable(L, -3);
+        };
+
+        auto l_pullArrayFromTable = [stackDump](lua_State* L, std::string& key,
+                        std::vector<std::string>& result)
+        {
+            std::cout << "Pulling array with key '" << key << "'" << std::endl;
+            stackDump(L);
+            //lua_getglobal(L, key.c_str());
+            //lua_pushnil(L);
+            lua_getfield(L, -1*lua_gettop(L), key.c_str());
+            lua_len(L,-1);
+            //size_t len = lua_tointeger(L, -1);
+            lua_pop(L, 1);
+            // Initialize the pair retrieval procedure.
+            lua_pushinteger(L, 0);
+            //stackDump(L);
+            lua_gettable(L, -2);
+            //stackDump(L);
+            std::string v;
+            //int k = 0;;
+            while (lua_next(L, 2) != 0) {
+                // 1. Store the value and pop it.
+                stackDump(L);
+                v = lua_tostring(L, -1);
+                result.push_back(v);
+                lua_pop(L, 1);
+                stackDump(L);
+            }
+            lua_pop(L, 1); // pop last
+        };
+
+        /* PULLERS */
+
+        auto l_pullTableString = [stackDump](lua_State* L, std::string& key, std::string& value) {
+            //std::cout << "Geting string from table with key '" << key << "'" <<  std::endl;
+            //stackDump(L);
+            lua_getfield(L, -1*lua_gettop(L), key.c_str());
+            value = std::string(lua_tostring(L, -1));
+            //stackDump(L);
+            lua_pop(L, 1);
+            //stackDump(L);
+        };
+
+        auto l_pullTableFromTable = [stackDump](lua_State* L, std::string& key,
+            std::multimap<std::string, std::string>& table)
+        {
+            std::cout << "Pulling table with key '" << key << "'" << std::endl;
+            stackDump(L);
+            //lua_getglobal(L, key.c_str());
+            //lua_pushnil(L);
+
+            lua_getfield(L, -1*lua_gettop(L), key.c_str());
+            lua_len(L,-1);
+            //size_t len = lua_tointeger(L, -1);
+            lua_pop(L, 1);
+            // Initialize the pair retrieval procedure.
+            lua_pushinteger(L, 0);
+            //stackDump(L);
+            lua_gettable(L, -2);
+            //stackDump(L);
+            std::string k, v;
+            while (lua_next(L, 2) != 0) {
+                // 1. Store the value and pop it.
+                //stackDump(L);
+                v = lua_tostring(L, -1);
+                lua_pop(L, 1);
+                // 2. Store the key and leave it there for next call.
+                k = lua_tostring(L, -1);
+                table.insert(std::make_pair(k, v));
+                //lua_pushstring(L, k.c_str());
+                //stackDump(L);
+            }
+            lua_pop(L, 1); // pop last
+        };
+
+        /* Push document. */
+        Document docu;
+        docu.method = "POST";
+        docu.path = "/this/is/a/test";
+        docu.headers.insert(std::make_pair("h1", "header1"));
+        docu.headers.insert(std::make_pair("h2", "header2"));
+        docu.arr_data = {"a", "e", "i", "o", "u"};
+        //docu.body.insert(std::make_pair("attr1", "attribute1"));
+        //docu.body.insert(std::make_pair("attr2", "attribute2"));
+
+        lua_State* L = luaL_newstate();
+        luaL_dostring(L, TEST);
+        lua_getglobal(L, "test");
+        if (!lua_isfunction(L, -1))
+        {
+            std::cout << "global 'test' is not a function. " << std::endl;
+            lua_close(L);
+            exit(-1);
+        }
+        std::cout << "Function retreived. Inserting 'doc' argument." << std::endl;
+        lua_newtable(L);
+        std::string
+        k = "method";
+        l_pushTableString(L, k, docu.method);
+        k = "path";
+        l_pushTableString(L, k, docu.path);
+        k = "headers";
+        l_pushTableToTable(L, k, docu.headers);
+        k = "body";
+        l_pushTableToTable(L, k, docu.body);
+        k = "arr_data";
+        l_pushArrayToTable(L, k, docu.arr_data);
+        /* Do basic operations on the document. */
+        execute(L, 1, 1, 0);
+        /* Pull document. */
+        Document out;
+        k = "method";
+        l_pullTableString(L, k, out.method);
+        k = "path";
+        l_pullTableString(L, k, out.path);
+        k = "headers";
+        l_pullTableFromTable(L, k,  out.headers);
+        k = "body";
+        l_pullTableFromTable(L, k, out.body);
+        k = "arr_data";
+        l_pullArrayFromTable(L, k, out.arr_data);
+        lua_close(L);
+
+        /* Print results. */
+        std::cout << "---- RESULTS ----" << std::endl;
+        std::cout << "Old method: " << docu.method << std::endl;
+        std::cout << "New method: " << out.method << std::endl;
+        std::cout << "---" << std::endl;
+        std::cout << "Old path: " << docu.path << std::endl;
+        std::cout << "New path: " << out.path << std::endl;
+        std::cout << "---" << std::endl;
+        std::cout << "Old headers: " << std::endl;
+        for (auto it = docu.headers.begin(); it != docu.headers.end(); ++it)
+        {
+            std::cout << "  " << it->first << " -> " << it->second << std::endl;
+        }
+        std::cout << "New headers: " << std::endl;
+        for (auto it = out.headers.begin(); it != out.headers.end(); ++it)
+        {
+            std::cout << "  " << it->first << " -> " << it->second << std::endl;
+        }
+        std::cout << "---" << std::endl;
+        std::cout << "Old body: " << std::endl;
+        for (auto it = docu.body.begin(); it != docu.body.end(); ++it)
+        {
+            std::cout << "  " << it->first << " -> " << it->second << std::endl;
+        }
+        std::cout << "New body: " << std::endl;
+        for (auto it = out.body.begin(); it != out.body.end(); ++it)
+        {
+            std::cout << "  " << it->first << " -> " << it->second << std::endl;
+        }
+        std::cout << "---" << std::endl;
+        std::cout << "Old string array: " << std::endl;
+        for (auto it = docu.arr_data.begin(); it != docu.arr_data.end(); ++it)
+        {
+            std::cout << "  " << *it << std::endl;
+        }
+        std::cout << "New string array: " << std::endl;
+        for (auto it = out.arr_data.begin(); it != out.arr_data.end(); ++it)
+        {
+            std::cout << "  " << *it << std::endl;
+        }
+
     }
 }
